@@ -148,7 +148,7 @@ export const fetchProblemStatusAndGenerateCSV = async (req: Request, res: Respon
     // Step 7: Upload ratios to Sheet2 starting at D1
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
-      range: 'Sheet2!D1',
+      range: 'Sheet2!E1',
       valueInputOption: 'RAW',
       requestBody: {
         values: [problemList, ...rows], // header only contains problem names
