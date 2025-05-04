@@ -3,10 +3,10 @@ version: '3.8'
 services:
   app:
     build: .
-    container_name: alfa-leetcode-api-docker
+    container_name: leetcode-api-docker
     ports:
       - '3000:3000'
-    restart: no
+    restart: "no"
     environment:
       - WDS_SOCKET_HOST=127.0.0.1 
       - CHOKIDAR_USEPOLLING=true

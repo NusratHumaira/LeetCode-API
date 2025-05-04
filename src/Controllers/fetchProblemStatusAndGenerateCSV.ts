@@ -12,7 +12,7 @@ const SHEET2_RANGE = 'Sheet2';
 
 const auth = new JWT({
   email: process.env.GOOGLE_CLIENT_EMAIL!,
-  key: process.env.GOOGLE_PRIVATE_KEY!,
+  key: process.env.GOOGLE_PRIVATE_KEY!.replace(/\\n/g, '\n'),
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
@@ -106,10 +106,12 @@ export const fetchProblemStatusAndGenerateCSV = async (req: Request, res: Respon
       const room = userRoomMap[username];
       if (!room) continue;
 
-
+      // Object.entries(row).forEach(([key, value]) => {
+      //   if (key.toLowerCase() === 'username') return;
       Object.entries(row).forEach(([key, value]) => {
         const keyLower = key.toLowerCase();
         if (['username', 'name', 'room'].includes(keyLower)) return;
+      
         roomProblemStats[room] ??= {};
         roomProblemStats[room][key] ??= { solved: 0, total: 0 };
 
