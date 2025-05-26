@@ -25,39 +25,51 @@ export const fetchProblemStatusAndGenerateCSV = async (req: Request, res: Respon
   }
 
   try {
-    // Step 1: Fetch usernames from Sheet1 (via published CSV)
+    // Step 1: Fetch usernames from Sheet1
     const csvResponse = await fetch(`https://docs.google.com/spreadsheets/d/e/2PACX-1vQhW0WdhfhQkGR3eLXJog9Z8ActeZmVaYtA1Tdl7b1TxKe_daVVQxYSAcAA6q72IdR-muQveHx6EAq0/pub?output=csv`);
     const csvText = await csvResponse.text();
     const records = parse(csvText, { columns: true, skip_empty_lines: true });
+    const usernames = records.map((r: any) => r.Username || r.username).filter(Boolean);
 
-    const usernames = records.map((r: any) => r.Username || r.username);
+    // Step 2: Parallelized LeetCode query
+    const BATCH_SIZE = 10;
+    const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
-    // Step 2: Query LeetCode for each user
+    const fetchUserStatus = async (username: string) => {
+      try {
+        const leetRes = await fetch('https://leetcode.com/graphql', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Referer: 'https://leetcode.com',
+          },
+          body: JSON.stringify({
+            query,
+            variables: { username, limit: 50 },
+          }),
+        });
+
+        const data = await leetRes.json() as LeetCodeResponse;
+        const recent = data.data?.recentAcSubmissionList || [];
+        const solved = recent.some(
+          (s: any) => s?.titleSlug?.toLowerCase() === (problemName as string).toLowerCase()
+        );
+        return { username, solved };
+      } catch (err) {
+        console.warn(`Failed to fetch for ${username}`, err);
+        return { username, solved: false };
+      }
+    };
+
     const results: { username: string; solved: boolean }[] = [];
-
-    for (const username of usernames) {
-      const leetRes = await fetch('https://leetcode.com/graphql', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Referer: 'https://leetcode.com',
-        },
-        body: JSON.stringify({
-          query,
-          variables: { username, limit: 50 },
-        }),
-      });
-
-      const data = await leetRes.json() as LeetCodeResponse;
-      const recent = data.data?.recentAcSubmissionList || [];
-      const solved = recent.some(
-        (s: any) => s?.titleSlug?.toLowerCase() === (problemName as string).toLowerCase()
-      );
-
-      results.push({ username, solved });
+    for (let i = 0; i < usernames.length; i += BATCH_SIZE) {
+      const batch = usernames.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(batch.map(fetchUserStatus));
+      results.push(...batchResults);
+      await delay(100); // to avoid getting rate limited
     }
 
-    // Step 3: Update Sheet1 with solved/not solved column
+    // Step 3: Update Sheet1
     const updatedRecords = records.map((row: any) => {
       const userResult = results.find((r) =>
         r.username.toLowerCase() === (row.Username || row.username)?.toLowerCase()
@@ -78,7 +90,7 @@ export const fetchProblemStatusAndGenerateCSV = async (req: Request, res: Respon
       requestBody: { values },
     });
 
-    // Step 4: Fetch Sheet2 to get username-room mapping
+    // Step 4: Get Sheet2 username-room mapping
     const sheet2Res = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
       range: SHEET2_RANGE,
@@ -98,7 +110,7 @@ export const fetchProblemStatusAndGenerateCSV = async (req: Request, res: Respon
       }
     });
 
-    // Step 5: Build stats per room per problem
+    // Step 5: Compute stats per room
     const roomProblemStats: Record<string, Record<string, { solved: number; total: number }>> = {};
 
     for (const row of updatedRecords) {
@@ -106,12 +118,10 @@ export const fetchProblemStatusAndGenerateCSV = async (req: Request, res: Respon
       const room = userRoomMap[username];
       if (!room) continue;
 
-      // Object.entries(row).forEach(([key, value]) => {
-      //   if (key.toLowerCase() === 'username') return;
       Object.entries(row).forEach(([key, value]) => {
         const keyLower = key.toLowerCase();
         if (['username', 'name', 'room'].includes(keyLower)) return;
-      
+
         roomProblemStats[room] ??= {};
         roomProblemStats[room][key] ??= { solved: 0, total: 0 };
 
@@ -122,7 +132,7 @@ export const fetchProblemStatusAndGenerateCSV = async (req: Request, res: Respon
       });
     }
 
-    // Step 6: Prepare ratio matrix (no Room column, just ratios)
+    // Step 6: Build matrix
     const allProblems = new Set<string>();
     Object.values(roomProblemStats).forEach(stats =>
       Object.keys(stats).forEach(p => allProblems.add(p))
@@ -145,13 +155,13 @@ export const fetchProblemStatusAndGenerateCSV = async (req: Request, res: Respon
       rows.push(row);
     }
 
-    // Step 7: Upload ratios to Sheet2 starting at D1
+    // Step 7: Upload to Sheet2
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
       range: 'Sheet2!E1',
       valueInputOption: 'RAW',
       requestBody: {
-        values: [problemList, ...rows], // header only contains problem names
+        values: [problemList, ...rows],
       },
     });
 

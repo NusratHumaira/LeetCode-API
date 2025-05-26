@@ -19,7 +19,6 @@ const auth = new google_auth_library_1.JWT({
 });
 const sheets = googleapis_1.google.sheets({ version: 'v4', auth });
 const fetchProblemStatusAndGenerateCSV = async (req, res, query) => {
-    var _a;
     const { problemName } = req.query;
     if (!problemName) {
         return res.status(400).json({ error: 'Missing problemName' });
@@ -28,24 +27,39 @@ const fetchProblemStatusAndGenerateCSV = async (req, res, query) => {
         const csvResponse = await (0, node_fetch_1.default)(`https://docs.google.com/spreadsheets/d/e/2PACX-1vQhW0WdhfhQkGR3eLXJog9Z8ActeZmVaYtA1Tdl7b1TxKe_daVVQxYSAcAA6q72IdR-muQveHx6EAq0/pub?output=csv`);
         const csvText = await csvResponse.text();
         const records = (0, sync_1.parse)(csvText, { columns: true, skip_empty_lines: true });
-        const usernames = records.map((r) => r.Username || r.username);
+        const usernames = records.map((r) => r.Username || r.username).filter(Boolean);
+        const BATCH_SIZE = 10;
+        const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+        const fetchUserStatus = async (username) => {
+            var _a;
+            try {
+                const leetRes = await (0, node_fetch_1.default)('https://leetcode.com/graphql', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Referer: 'https://leetcode.com',
+                    },
+                    body: JSON.stringify({
+                        query,
+                        variables: { username, limit: 50 },
+                    }),
+                });
+                const data = await leetRes.json();
+                const recent = ((_a = data.data) === null || _a === void 0 ? void 0 : _a.recentAcSubmissionList) || [];
+                const solved = recent.some((s) => { var _a; return ((_a = s === null || s === void 0 ? void 0 : s.titleSlug) === null || _a === void 0 ? void 0 : _a.toLowerCase()) === problemName.toLowerCase(); });
+                return { username, solved };
+            }
+            catch (err) {
+                console.warn(`Failed to fetch for ${username}`, err);
+                return { username, solved: false };
+            }
+        };
         const results = [];
-        for (const username of usernames) {
-            const leetRes = await (0, node_fetch_1.default)('https://leetcode.com/graphql', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Referer: 'https://leetcode.com',
-                },
-                body: JSON.stringify({
-                    query,
-                    variables: { username, limit: 50 },
-                }),
-            });
-            const data = await leetRes.json();
-            const recent = ((_a = data.data) === null || _a === void 0 ? void 0 : _a.recentAcSubmissionList) || [];
-            const solved = recent.some((s) => { var _a; return ((_a = s === null || s === void 0 ? void 0 : s.titleSlug) === null || _a === void 0 ? void 0 : _a.toLowerCase()) === problemName.toLowerCase(); });
-            results.push({ username, solved });
+        for (let i = 0; i < usernames.length; i += BATCH_SIZE) {
+            const batch = usernames.slice(i, i + BATCH_SIZE);
+            const batchResults = await Promise.all(batch.map(fetchUserStatus));
+            results.push(...batchResults);
+            await delay(100);
         }
         const updatedRecords = records.map((row) => {
             const userResult = results.find((r) => { var _a; return r.username.toLowerCase() === ((_a = (row.Username || row.username)) === null || _a === void 0 ? void 0 : _a.toLowerCase()); });
